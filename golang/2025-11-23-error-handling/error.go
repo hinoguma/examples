@@ -1,4 +1,4 @@
-package exp
+package example
 
 import (
 	"encoding/json"
@@ -8,13 +8,19 @@ import (
 	"time"
 )
 
+var defaultMaxDepth = 32 // スタックトレースの深さ
+
 func NewMyError(message string) *MyError {
 	err := &MyError{
 		err:        errors.New(message),
-		stacktrace: NewStackTrace(2, 32),
+		stacktrace: NewStackTrace(2, defaultMaxDepth),
 	}
 	return err
 }
+
+
+type ErrorType string
+const ErrorTypeNone ErrorType = ""
 
 type MyError struct {
 	// required
@@ -72,8 +78,6 @@ func (e *MyError) AddSubError(errs ...error) *MyError {
 	return e
 }
 
-type ErrorType string
-
 func NewStackTrace(skip int, maxDepth int) []StackTraceFrame {
 	if skip < 0 {
 		skip = 0
@@ -111,14 +115,6 @@ func NewStackTraceFrame(f runtime.Frame) StackTraceFrame {
 	}
 }
 
-func NewMyErrorByErr(e error) *MyError {
-	err := &MyError{
-		err:        e,
-		stacktrace: NewStackTrace(2, 32),
-	}
-	return err
-}
-
 func ToMyError(err error) *MyError {
 	if err == nil {
 		return nil
@@ -129,6 +125,16 @@ func ToMyError(err error) *MyError {
 	}
 	return NewMyErrorByErr(err)
 }
+
+
+func NewMyErrorByErr(e error) *MyError {
+	err := &MyError{
+		err:        e,
+		stacktrace: NewStackTrace(2, defaultMaxDepth),
+	}
+	return err
+}
+
 
 func With(err error, options ...WithFunc) error {
 	if err == nil {
@@ -175,6 +181,77 @@ func ToJsonString(err error) (string, error) {
 	return string(b), nil
 }
 
+
+
+
+
+
+
+
+const ErrorTypeDataNotFound ErrorType = "DataNotFound"
+const ErrorTypeConnectionFailed ErrorType = "ConnectionFailed"
+
+func NewDataNotFoundError(id string) *MyError {
+    err := NewMyError("data not found")
+    err.AddTag("id", id)
+    return err
+}
+
+func NewConnectionFailed(code int) *MyError {
+    err := NewMyError("connection failed")
+    err.SetType(ErrorTypeConnectionFailed)
+    err.AddTag("code", code)
+    return err
+}
+
+func IsDataNotFoundError(err error) bool {
+    return IsType(err, ErrorTypeDataNotFound)
+}
+
+func IsConnectionFailed(err error) bool {
+    return IsType(err, ErrorTypeConnectionFailed)
+}
+
+
+func IsType(err error, t ErrorType) bool {
+	if err == nil {
+		return false
+	}
+    // MyErrorでアサーションするのもOKですが
+    // また違うカスタム構造体を作ったときのことを考えて
+    // Type() ErrorType を実装していればなんでもOKとしています
+	te, ok := err.(interface{ Type() ErrorType })
+	if ok && te.Type() == t {
+		return true
+	}
+
+    // errがラップされている場合Unwrapして内部のエラーもチェックします。
+	switch x := err.(type) {
+	case interface{ Unwrap() error }:
+		return IsType(x.Unwrap(), t)
+	case interface{ Unwrap() []error }:
+		for _, subErr := range x.Unwrap() {
+			if IsType(subErr, t) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func Wrap(err error, msg string) error {
+	if err == nil {
+		return nil
+	}
+    me := ToMyError(err)
+	if len(me.StackTrace()) == 0 {
+		me.WithStackTrace()
+	}
+	me.SetErr(fmt.Errorf("%s: %w", msg, me.Unwrap()))
+    return me
+}
+
+
 type ErrorJson struct {
 	Type       string            `json:"type"`
 	Message    string            `json:"message"`
@@ -210,36 +287,4 @@ func ToErrorJson(err error) ErrorJson {
 	return ej
 }
 
-// json出力零
-/**
-{
-	  "type": "validation_error",
-	  "message": "invalid input data",
-	  "when": "2024-06-01T12:34:56Z",
-	  "request_id": "abcd-1234-efgh-5678",
-	  "tags": {
-	    "field": "email",
-	    "reason": "missing"
-	  },
-	  "stack_trace": [
-	    {
-	      "file": "/path/to/file.go",
-	      "line": 42,
-	      "function": "main.main"
-	    },
-	    {
-	      "file": "/path/to/other_file.go",
-	      "line": 27,
-	      "function": "main.validateInput"
-	    }
-	  ],
-	  "sub_errors": [
-	    {
-	      "type": "format_error",
-	      "message": "email format is invalid"
-	    },
-	]
-}
 
-
-*/
